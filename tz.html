@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        body {
+        margin: 0;
+        }
+        #c {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+        }
+    </style>
+</head>
+<body>
+      <div id="wrapper">
+        <div id="divvy" style="visibility: hidden; position: absolute; z-index: 1; left: 50px; top: 10px; width:200px; height:40px; background-color: white;" />
+    </div>
+    <canvas id="c"></canvas>
+    <script type="module">
+              // Three.js - Picking - RayCaster w/Transparency
+      // from https://threejsfundamentals.org/threejs/threejs-picking-gpu.html
+
+      import * as THREE from 'https://threejsfundamentals.org/threejs/resources/threejs/r113/build/three.module.js';
+      import { OrbitControls } from 'https://threejsfundamentals.org/threejs/resources/threejs/r113/examples/jsm/controls/OrbitControls.js';
+      import {GUI} from 'https://threejsfundamentals.org/threejs/../3rdparty/dat.gui.module.js';
+      function main() {
+        const canvas = document.querySelector('#c');
+        const divvy = document.querySelector('#divvy');
+        const renderer = new THREE.WebGLRenderer({canvas});
+
+        const fov = 60;
+        const aspect = 2;  // the canvas default
+        const near = 0.1;
+        const far = 200;
+        const camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+        camera.position.set(20,20,30);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('white');
+        const pickingScene = new THREE.Scene();
+        pickingScene.background = new THREE.Color(0);
+
+        const controls = new OrbitControls( camera, renderer.domElement );
+
+        {
+          const color = 0xFFFFFF;
+          const intensity = 1;
+          const light = new THREE.AmbientLight(color, intensity);
+          light.position.set(-1, 2, 4);
+          scene.add(light);
+        }
+
+        const boxWidth = 1;
+        const boxHeight = 1;
+        const boxDepth = 1;
+        const geometry = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
+
+        function rand(min, max) {
+          if (max === undefined) {
+            max = min;
+            min = 0;
+          }
+          return min + (max - min) * Math.random();
+        }
+
+        function randomColor() {
+          return `hsl(${rand(360) | 0}, ${rand(30, 100) | 0}%, 50%)`;
+        }
+        
+        const idToObject = {};
+        const numObjects = 25;
+        let id =1;
+        const cubes = [];
+        for (let i = 0; i < numObjects; ++i) {
+          const materials = [
+              new THREE.MeshLambertMaterial({color: randomColor()}),
+              new THREE.MeshLambertMaterial({color: randomColor()}),
+              new THREE.MeshLambertMaterial({color: randomColor()}),
+              new THREE.MeshLambertMaterial({color: randomColor()}),
+              new THREE.MeshLambertMaterial({color: randomColor()}),
+              new THREE.MeshLambertMaterial({color: randomColor()})
+          ];
+          const cube = new THREE.Mesh(geometry, materials);
+          scene.add(cube);
+          cubes.push(cube);
+          const pickingMaterials = [];
+          for (let j =0; j<cube.geometry.faces.length; j++){
+              idToObject[j+id]=cube.geometry.faces[j];
+              const pickingMaterial = new THREE.MeshPhongMaterial({
+                  emissive: new THREE.Color(j+id),
+                  color: new THREE.Color(0, 0, 0),
+                  specular: new THREE.Color(0, 0, 0),
+                  transparent: true,
+                  side: THREE.DoubleSide,
+                  alphaTest: 0.5,
+                  blending: THREE.NoBlending,
+              });
+              pickingMaterials.push(pickingMaterial);
+          }
+          id+=6;
+
+          cube.position.set(( i % 5 ) * 19 / 2 -15, 0, Math.floor( i / 5 ) *10 - 30);
+          cube.scale.set(4, 4, 4);
+          
+          const pickingCube = new THREE.Mesh(geometry, pickingMaterials);
+          pickingScene.add(pickingCube);
+          pickingCube.position.copy(cube.position);
+          pickingCube.rotation.copy(cube.rotation);
+          pickingCube.scale.copy(cube.scale);
+        }
+
+        function resizeRendererToDisplaySize(renderer) {
+          const canvas = renderer.domElement;
+          const width = canvas.clientWidth;
+          const height = canvas.clientHeight;
+          const needResize = canvas.width !== width || canvas.height !== height;
+          if (needResize) {
+            renderer.setSize(width, height, false);
+          }
+          return needResize;
+        }
+        let pixi;
+        class GPUPickHelper {
+          constructor() {
+            // create a 1x1 pixel render target
+            this.pickingTexture = new THREE.WebGLRenderTarget(1, 1);
+            this.pixelBuffer = new Uint8Array(4);
+            this.pickedObject = null;
+            this.pickedObjectSavedColor = 0;
+          }
+          pick(cssPosition, scene, camera, time) {
+            const {pickingTexture, pixelBuffer} = this;
+
+            // restore the color if there is a picked object
+            if (this.pickedObject) {
+              this.pickedObject.emissive.setHex(this.pickedObjectSavedColor);
+              this.pickedObject = undefined;
+            }
+
+            // set the view offset to represent just a single pixel under the mouse
+            const pixelRatio = renderer.getPixelRatio();
+            camera.setViewOffset(
+                renderer.getContext().drawingBufferWidth,   // full width
+                renderer.getContext().drawingBufferHeight,  // full top
+                cssPosition.x * pixelRatio | 0,             // rect x
+                cssPosition.y * pixelRatio | 0,             // rect y
+                1,                                          // rect width
+                1,                                          // rect height
+            );
+            // render the scene
+            renderer.setRenderTarget(pickingTexture);
+            renderer.render(scene, camera);
+            renderer.setRenderTarget(null);
+            // clear the view offset so rendering returns to normal
+            camera.clearViewOffset();
+            //read the pixel
+            renderer.readRenderTargetPixels(
+                pickingTexture,
+                0,   // x
+                0,   // y
+                1,   // width
+                1,   // height
+                pixelBuffer);
+            const id =
+                (pixelBuffer[0] << 16) |
+                (pixelBuffer[1] <<  8) |
+                (pixelBuffer[2]      );
+            if (pixelBuffer[2]>0&&id!==0){
+               pixi=id;
+            }
+            const intersectedObject = idToObject[pixi];
+            clearPickPosition()
+            if (pixi) {
+              // pick the first object. It's the closest one
+              this.pickedObject = cubes[Math.floor((pixi-1)/6)].material[Math.floor((pixi-1)%6)];
+              divvy.innerHTML = `${Math.floor((pixi-1)/6)+1} cube.<br\> Face color is ${Math.floor(this.pickedObject.color.r*255)}.
+               ${Math.floor(this.pickedObject.color.g*255)}. ${Math.floor(this.pickedObject.color.b*255)}`;
+              divvy.style.visibility = "visible";
+              // save its color
+              this.pickedObjectSavedColor = this.pickedObject.emissive.getHex();
+              // set its emissive color to flashing blue/yellow
+              this.pickedObject.emissive.setHex((time * 8) % 2 > 1 ? 0x0000FF : 0xFFFF00);
+            }
+          }
+        }
+
+        const pickPosition = {x: 0, y: 0};
+        const pickHelper = new GPUPickHelper();
+        clearPickPosition();
+
+        function render(time) {
+          time *= 0.001;  // convert to seconds;
+
+          if (resizeRendererToDisplaySize(renderer)) {
+            const canvas = renderer.domElement;
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+          }
+
+          pickHelper.pick(pickPosition, pickingScene, camera, time);
+
+          renderer.render(scene, camera);
+
+          requestAnimationFrame(render);
+        }
+        requestAnimationFrame(render);
+
+        function getCanvasRelativePosition(event) {
+          const rect = canvas.getBoundingClientRect();
+          return {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+          };
+        }
+
+        function setPickPosition(event) {
+          const pos = getCanvasRelativePosition(event);
+          pickPosition.x = pos.x;
+          pickPosition.y = pos.y;
+        }
+
+        function clearPickPosition() {
+          // unlike the mouse which always has a position
+          // if the user stops touching the screen we want
+          // to stop picking. For now we just pick a value
+          // unlikely to pick something
+          pickPosition.x = -100000;
+          pickPosition.y = -100000;
+        }
+
+        window.addEventListener('dblclick', setPickPosition);
+
+        window.addEventListener('touchstart', (event) => {
+          // prevent the window from scrolling
+          event.preventDefault();
+          setPickPosition(event.touches[0]);
+        }, {passive: false});
+
+        window.addEventListener('touchmove', (event) => {
+          setPickPosition(event.touches[0]);
+        });
+
+        window.addEventListener('touchend', clearPickPosition);
+      }
+
+      main();
+
+    </script>
+</body>
+</html>
